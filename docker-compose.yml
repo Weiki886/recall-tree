@@ -1,0 +1,26 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: recalltree-postgres
+    ports:
+      - "${RECALLTREE_DB_PORT:-5432}:5432"
+    environment:
+      # 与后端读取同一份 .env，避免容器口令与应用配置各写一处后漂移。
+      # Compose 会自动加载仓库根目录的 .env（见 scripts/dev-up.sh）。
+      POSTGRES_DB: ${RECALLTREE_DB_NAME:-recalltree}
+      POSTGRES_USER: ${RECALLTREE_DB_USER:-recalltree}
+      POSTGRES_PASSWORD: ${RECALLTREE_DB_PASSWORD:-recalltree}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${RECALLTREE_DB_USER:-recalltree} -d ${RECALLTREE_DB_NAME:-recalltree}",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  pgdata:

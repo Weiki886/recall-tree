@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.recalltree</groupId>
+    <artifactId>recalltree-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>recalltree-domain</artifactId>
+  <name>RecallTree Domain</name>
+  <description>记忆聚合、版本链不变量、冲突判定、时效衰减规则与评分融合公式。
+    本模块刻意没有 Spring、JDBC、Spring AI 或 HTTP 依赖：核心方法必须能用纯
+    JUnit 验证，这是 ADR-001 的主要动机，由 ArchUnit 在 api 模块中断言。</description>
+
+  <!--
+    此处不添加任何生产依赖。新增依赖前请先确认它不会把框架类型引入领域层，
+    否则应改为在 application 定义 Port、在 infrastructure 实现。
+  -->
+</project>

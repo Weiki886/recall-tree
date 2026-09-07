@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.recalltree</groupId>
+    <artifactId>recalltree-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>recalltree-architecture-tests</artifactId>
+  <name>RecallTree Architecture Tests</name>
+  <description>ADR-001 依赖方向的断言。
+
+    这个模块单独存在是有原因的：架构规则必须能同时看到全部五个模块才能真正生效。
+    如果把规则放在 api 模块里，evaluation 不在其 classpath 上，
+    "evaluation 不得依赖 api" 这条规则会因为匹配不到任何类而静默空跑——
+    看起来通过，实际上从未校验。ArchUnit 的 failOnEmptyShould 会暴露这种假通过。</description>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.recalltree</groupId>
+      <artifactId>recalltree-domain</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.recalltree</groupId>
+      <artifactId>recalltree-application</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.recalltree</groupId>
+      <artifactId>recalltree-infrastructure</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.recalltree</groupId>
+      <artifactId>recalltree-api</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>com.recalltree</groupId>
+      <artifactId>recalltree-evaluation</artifactId>
+      <version>${project.version}</version>
+      <scope>test</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>com.tngtech.archunit</groupId>
+      <artifactId>archunit-junit5</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <!--
+        这个模块只有测试代码，没有 main 源码，默认会打出空 jar 并告警。
+        它也不需要被任何模块依赖，因此跳过打包。
+      -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>default-jar</id>
+            <phase>none</phase>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-install-plugin</artifactId>
+        <configuration>
+          <skip>true</skip>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>
