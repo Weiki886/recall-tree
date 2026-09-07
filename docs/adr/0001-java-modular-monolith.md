@@ -26,7 +26,7 @@ RecallTree 需要同时承载长期记忆领域规则、模型调用、PostgreSQ
    - `evaluation`：基线、数据集、指标与报告的独立组合根；
    - `web`：Vue 3/TypeScript 客户端。
 4. 依赖方向固定为 `api/evaluation/infrastructure -> application -> domain`。`domain` 不得反向依赖框架模块。
-5. API 与评测模块都是组合根，可以装配 Infrastructure Adapter；两者之间不得互相依赖。
+5. API 与评测模块都是组合根，可以装配 Infrastructure Adapter；两者之间不得互相依赖。「不得互相依赖」包含不得复用对方的 DTO、映射器与配置类：评测若复用 `api` 的 DTO，实验结果的形态就会被 HTTP 传输结构绑定，日后调整响应字段会连带影响历史实验的可比性。评测需要的数据一律经 `application` Port 获取，必要时在 `evaluation` 内定义自己的结果模型。
 6. 使用 ArchUnit 在 Issue #3 后验证关键依赖规则。
 
 Spring Boot 当前官方版本要求至少 Java 17；选择 Java 21 是为了使用成熟 LTS 运行时，同时避免将项目绑定到更新的非必要语言特性。具体 Spring Boot/Spring AI 补丁版本在工程骨架中锁定，而不是写死在架构原则中。

@@ -51,7 +51,7 @@ RecallTree 是可替换模型之上的长期记忆层，不训练基础模型，
 | `application` | 写入/读取用例编排、事务意图、`ChatModelPort` 等 Port 定义 | 依赖具体 Adapter、拼接 SQL、处理 SSE |
 | `infrastructure` | Repository、pgvector 检索、Provider Adapter、时钟与 ID 生成、指标 | 承载领域规则或用例决策 |
 | `api` | REST/SSE 端点、认证上下文、DTO 映射、错误模型 | 直接访问数据库或模型 SDK |
-| `evaluation` | 数据集加载、基线、指标、报告 | 不得依赖 `api` 模块，不得复用其 HTTP 层 |
+| `evaluation` | 数据集加载、基线、指标、报告 | 不得依赖 `api` 模块（含其 DTO 与 HTTP 层）；须经 `application` Port 调用 |
 | `web` | 对话界面、记忆中心、版本时间线、检索轨迹可视化 | 实现记忆业务规则 |
 
 ### Port 清单

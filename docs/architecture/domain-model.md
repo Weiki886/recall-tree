@@ -9,6 +9,7 @@
 - API 可以做**读模型投影**，把跨表派生的值直接放进响应，避免前端 N+1 请求。例如 `MemoryItem` 响应中的 `currentContent`（取自当前版本）、`versionCount`、`hasUnresolvedConflict`、`confidence`（取自当前版本），在持久化层都不是 `memory_item` 表的列。
 - API 可以做**反规范化**。例如 `RetrievalCandidate` 响应带 `content` 与 `memoryItemId`，使记忆中心一次请求即可渲染完整检索轨迹；持久化层只存 `memoryVersionId` 与各分量得分。
 - 反过来，持久化字段也可以不出现在 API 中。例如 `MemoryVersion.contentHash`、`MemoryEmbedding` 的全部字段属于内部实现，不对外暴露。
+- API 也可以做**归一化**，把持久化层的平铺字段重新组织为嵌套对象。例如领域模型 `Message` 的 `promptTokens`、`completionTokens`、`model`、`latencyMs` 是平铺字段，在契约中归入 `TokenUsage` 嵌套对象。这是为了减少传输结构中的顶层字段数，不改变业务语义。
 
 因此实现时的规则是：**枚举值与业务不变量必须严格一致**，字段集合允许 API 侧更丰富。若发现枚举值或不变量在两份文档间不一致，那是缺陷，须以本文档为准修正契约。
 
