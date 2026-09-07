@@ -54,6 +54,23 @@ RecallTree 是可替换模型之上的长期记忆层，不训练基础模型，
 | `evaluation` | 数据集加载、基线、指标、报告 | 依赖 `api`，或复用其 HTTP 层 |
 | `web` | 对话界面、记忆中心、版本时间线、检索轨迹可视化 | 实现记忆业务规则 |
 
+### Port 清单
+
+全部 Port 由 `application` 模块声明、`infrastructure` 模块实现，分两类：
+
+| Port | 类别 | 职责 | 约束来源 |
+| --- | --- | --- | --- |
+| `ChatModelPort` | 模型 | 对话生成与结构化输出，含流式 | [ADR-003](../adr/0003-model-provider-boundary.md) |
+| `EmbeddingModelPort` | 模型 | 文本转向量 | [ADR-003](../adr/0003-model-provider-boundary.md) |
+| `MemorySearchPort` | 存储 | 语义候选（pgvector）与关键词候选召回，返回未排序候选集 | [ADR-002](../adr/0002-postgresql-pgvector.md) |
+| `MemoryRepositoryPort` | 存储 | 记忆、版本、来源、冲突、审阅记录的读写与事务化版本切换 | [ADR-002](../adr/0002-postgresql-pgvector.md) |
+| `MemoryTaskPort` | 存储 | 异步写入任务的登记、领取、重试与状态更新 | [ADR-002](../adr/0002-postgresql-pgvector.md) |
+| `ClockPort` / `IdGeneratorPort` | 基础设施 | 可控时间与 UUIDv7 生成，保证衰减与分页逻辑可测试 | 本文档 |
+
+两类 Port 的关键区别：模型类 Port 的输出是**不可信输入**，必须校验后才可落库；存储类 Port 的输出可信，但必须以 `ownerId` 为必填查询条件。
+
+`MemorySearchPort` 只负责召回候选，**不负责排序**。多信号加权融合由 `domain` 的 `HybridScorer` 完成，这样评分公式可以用纯单元测试验证，也便于消融实验替换权重而不碰 SQL。
+
 ## 3. 同步与异步边界
 
 首版只有一个进程，但读写路径的时延要求不同，边界必须显式区分。
@@ -74,7 +91,7 @@ RecallTree 是可替换模型之上的长期记忆层，不训练基础模型，
 
 ```
 用户提问
-  -> api: POST /v1/chat/messages (SSE)
+  -> api: POST /v1/conversations/{conversationId}/messages (SSE)
   -> application: AnswerWithMemoryUseCase
        -> RetrieveMemoryUseCase
             -> EmbeddingModelPort  (查询向量)
@@ -83,7 +100,7 @@ RecallTree 是可替换模型之上的长期记忆层，不训练基础模型，
             -> 产出 RetrievalTrace（含每条候选的分量得分与入选原因）
        -> 组装 Prompt（系统提示 + 命中记忆 + 近期会话）
        -> ChatModelPort (流式)
-  -> api: 向前端推送 token 事件 + trace 事件
+  -> api: 推送 retrieval-trace 事件，随后推送 token 事件，最后 message-completed
   -> application: 落库 message、RetrievalTrace，并登记 memory_task(EXTRACT)
 
 异步续接

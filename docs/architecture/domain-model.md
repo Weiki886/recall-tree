@@ -2,6 +2,16 @@
 
 本文档定义核心聚合的字段、身份、版本关系与生命周期，是 Issue #4 起各实现 Issue 的共同契约。存储决策见 [ADR-002](../adr/0002-postgresql-pgvector.md)。
 
+## 0. 与 API 契约的关系
+
+本文档描述**持久化结构**，[openapi.yaml](../api/openapi.yaml) 描述**传输结构**，两者刻意不要求逐字段一一对应：
+
+- API 可以做**读模型投影**，把跨表派生的值直接放进响应，避免前端 N+1 请求。例如 `MemoryItem` 响应中的 `currentContent`（取自当前版本）、`versionCount`、`hasUnresolvedConflict`、`confidence`（取自当前版本），在持久化层都不是 `memory_item` 表的列。
+- API 可以做**反规范化**。例如 `RetrievalCandidate` 响应带 `content` 与 `memoryItemId`，使记忆中心一次请求即可渲染完整检索轨迹；持久化层只存 `memoryVersionId` 与各分量得分。
+- 反过来，持久化字段也可以不出现在 API 中。例如 `MemoryVersion.contentHash`、`MemoryEmbedding` 的全部字段属于内部实现，不对外暴露。
+
+因此实现时的规则是：**枚举值与业务不变量必须严格一致**，字段集合允许 API 侧更丰富。若发现枚举值或不变量在两份文档间不一致，那是缺陷，须以本文档为准修正契约。
+
 ## 1. 概念地图
 
 ```

@@ -581,21 +581,32 @@ components:
             trace:
               $ref: '#/components/schemas/RetrievalTrace'
             usage:
-              type: object
-              properties:
-                promptTokens:
-                  type: integer
-                completionTokens:
-                  type: integer
-                latencyMs:
-                  type: integer
+              $ref: '#/components/schemas/TokenUsage'
+
+    TokenUsage:
+      type: object
+      description: |
+        模型调用成本与延迟。流式与非流式路径都必须提供，
+        否则实验无法统计 Token 成本（见 ADR-003 决策 6）。
+      required: [promptTokens, completionTokens]
+      properties:
+        promptTokens:
+          type: integer
+        completionTokens:
+          type: integer
+        latencyMs:
+          type: integer
+        model:
+          type: string
+          description: 实际使用的模型标识，回退或重试切换 Provider 时以此为准。
 
     StreamEvent:
       type: object
       description: |
         SSE 事件。event 字段决定 data 的负载类型：
         retrieval-trace -> RetrievalTrace；token -> { "delta": string }；
-        message-completed -> Message；error -> Problem；done -> 空对象。
+        message-completed -> MessageCompleted（含 TokenUsage）；
+        error -> Problem；done -> 空对象。
       required: [event, data]
       properties:
         event:
@@ -603,6 +614,35 @@ components:
           enum: [retrieval-trace, token, message-completed, error, done]
         data:
           description: JSON 负载，具体结构由 event 决定。
+          oneOf:
+            - $ref: '#/components/schemas/RetrievalTrace'
+            - $ref: '#/components/schemas/TokenDelta'
+            - $ref: '#/components/schemas/MessageCompleted'
+            - $ref: '#/components/schemas/Problem'
+            - type: object
+              description: done 事件负载，为空对象。
+              additionalProperties: false
+
+    TokenDelta:
+      type: object
+      description: token 事件负载。
+      required: [delta]
+      properties:
+        delta:
+          type: string
+      additionalProperties: false
+
+    MessageCompleted:
+      description: |
+        message-completed 事件负载。在完整消息之外附带 TokenUsage，
+        使流式路径与非流式路径具备同等的成本可观测性。
+      allOf:
+        - $ref: '#/components/schemas/Message'
+        - type: object
+          required: [usage]
+          properties:
+            usage:
+              $ref: '#/components/schemas/TokenUsage'
 
     MemoryItem:
       type: object
@@ -735,9 +775,12 @@ components:
 
     ConflictRecord:
       type: object
-      required: [id, incomingVersionId, existingVersionId, type, resolution, strategy, decidedAt]
+      required: [id, memoryItemId, incomingVersionId, existingVersionId, type, resolution, strategy, decidedAt]
       properties:
         id:
+          type: string
+          format: uuid
+        memoryItemId:
           type: string
           format: uuid
         incomingVersionId:
@@ -791,9 +834,12 @@ components:
 
     ReviewDecision:
       type: object
-      required: [id, action, decidedAt]
+      required: [id, memoryItemId, action, decidedAt]
       properties:
         id:
+          type: string
+          format: uuid
+        memoryItemId:
           type: string
           format: uuid
         action:

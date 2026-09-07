@@ -1,4 +1,4 @@
-# ADR-002：采用 PostgreSQL、pgvector 与显式 SQL 数据访问
+# ADR-002：采用 PostgreSQL、pgvector 与 MyBatis 显式 SQL 数据访问
 
 ## 状态
 
