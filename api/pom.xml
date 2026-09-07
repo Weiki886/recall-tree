@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.recalltree</groupId>
+    <artifactId>recalltree-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>recalltree-api</artifactId>
+  <name>RecallTree API</name>
+  <description>Spring Boot 组合根：REST/SSE 端点、认证上下文、DTO 映射、错误模型。
+    装配所有 Infrastructure Adapter。</description>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.recalltree</groupId>
+      <artifactId>recalltree-application</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.recalltree</groupId>
+      <artifactId>recalltree-infrastructure</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter-validation</artifactId>
+    </dependency>
+
+    <!-- 架构测试：验证 ADR-001 的依赖方向 -->
+    <dependency>
+      <groupId>com.tngtech.archunit</groupId>
+      <artifactId>archunit-junit5</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+        <version>${spring-boot.version}</version>
+        <configuration>
+          <!--
+            classifier 是必需的，不是可选优化。
+            repackage 默认会用 fat jar 替换普通 jar，把类挪进 BOOT-INF/classes/，
+            于是 architecture-tests 通过 Maven 依赖拿到的 api 制品里，
+            ArchUnit 在 com.recalltree.api 包下扫不到任何类，
+            failOnEmptyShould 就会让 apiMustNotDependOnEvaluation 等规则报"未校验任何类"。
+            这也解释了为什么 `mvn test` 通过而 `mvn verify` 失败：
+            repackage 绑定在 package 阶段，test 阶段还没执行到。
+            配了 classifier 后，普通 jar 保留供模块间依赖，
+            可执行 jar 以 recalltree-api-<version>-boot.jar 并存。
+          -->
+          <classifier>boot</classifier>
+        </configuration>
+        <executions>
+          <execution>
+            <goals>
+              <goal>repackage</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

@@ -3,8 +3,12 @@
 .AppleDouble
 .LSOverride
 
-# Java / Maven
+# Maven
 target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+release.properties
 *.class
 *.jar
 *.war
@@ -33,7 +37,7 @@ logs/
 npm-debug.log*
 pnpm-debug.log*
 
-# 凭据与本地配置：禁止提交真实密钥（见威胁模型 T9、T16）
+# 凭据与本地配置：禁止提交真实密钥
 .env
 .env.*
 !.env.example
