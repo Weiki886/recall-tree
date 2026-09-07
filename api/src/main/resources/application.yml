@@ -16,7 +16,7 @@ spring:
     driver-class-name: org.postgresql.Driver
   flyway:
     enabled: false
-    # 首版关闭 Flyway 自动迁移，手写 SQL 迁移在后续 Issue 中启用。
+    # 首版关闭 Flyway 自动迁移。后续 Issue 添加迁移脚本后启用（见 ADR-002 决策 3）。
 
 mybatis:
   mapper-locations: classpath:mapper/**/*.xml

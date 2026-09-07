@@ -52,3 +52,6 @@ coverage/
 .nyc_output/
 evaluation/output/
 evaluation/runs/
+
+# TypeScript 增量编译缓存
+*.tsbuildinfo
