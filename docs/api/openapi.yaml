@@ -86,6 +86,39 @@ paths:
                     type: [string, 'null']
         '401': { $ref: '#/components/responses/Unauthorized' }
 
+  /v1/conversations/{conversationId}:
+    get:
+      tags: [chat]
+      summary: 获取单个会话元数据
+      description: 只返回会话本身，不含消息列表。用于刷新标题、消息数与最近活动时间。
+      operationId: getConversation
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      responses:
+        '200':
+          description: 会话元数据
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Conversation'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [chat]
+      summary: 软删除会话
+      description: |
+        幂等操作。会话退出列表且不再作为对话上下文。
+        已从该会话提取的记忆不受影响（见领域模型第 2 节：记忆与会话生命周期独立）。
+        来源消息不会被物理删除，以保留记忆的证据链。
+      operationId: deleteConversation
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      responses:
+        '204':
+          description: 已软删除（重复调用同样返回 204）
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
   /v1/conversations/{conversationId}/messages:
     post:
       tags: [chat]
@@ -152,7 +185,10 @@ paths:
     get:
       tags: [memory]
       summary: 列出记忆
-      description: 默认只返回 ACTIVE 与 DORMANT；SOFT_DELETED 需显式指定 status 且不返回内容。
+      description: |
+        默认只返回 ACTIVE 与 DORMANT；ARCHIVED 默认不返回（需显式指定 status=ARCHIVED 或通过记忆中心的其他过滤条件获取）；
+        SOFT_DELETED 需显式指定 status 且不返回内容。
+        领域模型状态机说明见 domain-model.md 第 3 节。
       operationId: listMemories
       parameters:
         - name: type
@@ -211,7 +247,9 @@ paths:
     delete:
       tags: [memory]
       summary: 软删除记忆
-      description: 幂等操作。记忆退出检索且内容不再返回，可通过 review 的 RESTORE 恢复。
+      description: |
+        幂等操作。记忆退出检索且内容不再返回，可通过 review 的 RESTORE 恢复。
+        对已处于 SOFT_DELETED 的记忆重复调用仍返回 204。
       operationId: softDeleteMemory
       parameters:
         - $ref: '#/components/parameters/MemoryItemId'
@@ -221,15 +259,22 @@ paths:
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409':
-          $ref: '#/components/responses/Conflict'
+          description: 记忆已处于 PURGED 终态，无法软删除
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
 
   /v1/memories/{memoryItemId}/reviews:
     post:
       tags: [memory]
       summary: 人工审阅记忆
       description: |
-        CORRECT 与 MERGE 会创建 origin=USER_CORRECTED 的新版本并切换当前指针，
-        不修改历史版本。CONFIRM 将置信度锁定为 1.0。RESTORE 仅对 SOFT_DELETED 有效。
+        五种动作的语义（完整定义见领域模型第 9 节）：
+        CONFIRM 不创建新版本、不改 origin，将置信度置为 1.0 并锁定使其退出自动衰减；
+        CORRECT 与 MERGE 创建 origin=USER_CORRECTED 的新版本并切换当前指针，不修改历史版本；
+        DISCARD 将目标版本置为 REJECTED，仅对 NEEDS_REVIEW 或非当前版本有效；
+        RESTORE 仅对 SOFT_DELETED 有效，PURGED 为终态不可恢复。
       operationId: reviewMemory
       parameters:
         - $ref: '#/components/parameters/MemoryItemId'
@@ -548,7 +593,12 @@ components:
           description: 关闭时跳过检索与写入，用于基线对照。
         strategy:
           type: string
-          description: 指定检索策略标识，用于消融实验；缺省使用默认策略。
+          description: |
+            检索策略标识，用于消融实验分组。命名规范：`{variant}-{version}`，
+            例如 `default-v1`、`semantic-only-v1`、`keyword-boost-v2`。
+            缺省值为 `default-v1`，对应的权重配置定义在策略配置文件中。
+            实验中的策略标识必须与配置文件中的键一致，否则实验结果无法正确分组。
+          example: semantic-only-v1
       additionalProperties: false
 
     Message:
@@ -950,7 +1000,9 @@ components:
           type: string
         strategy:
           type: string
-          description: 检索策略标识，含权重配置版本。
+          description: |
+            检索策略标识，含权重配置版本。命名规范与 SendMessageRequest.strategy 相同，
+            缺省为 default-v1。
         weights:
           type: object
           description: 本次融合使用的权重，便于消融复现。

@@ -138,7 +138,7 @@ ACTIVE / DORMANT / ARCHIVED ──(用户删除)──> SOFT_DELETED ──(确�
 2. 每个 `MemoryItem` 至多一个 `CURRENT` 版本（数据库局部唯一索引保证）。
 3. `validTo` 非空时必须晚于 `validFrom`。
 4. `supersedesVersionId` 必须属于同一 `MemoryItem` 且 `versionNo` 更小。
-5. `origin = USER_CORRECTED` 的版本置信度固定为 1.0，且不参与自动衰减。
+5. 置信度锁定有两个来源，锁定后置信度固定为 1.0 且不参与自动衰减：`origin = USER_CORRECTED` 的版本自动锁定；经 `CONFIRM` 审阅的版本由 `ReviewDecision.confidenceLocked` 标记锁定，此时 `origin` 保持原值不变（见第 9 节）。衰减任务必须依据锁定标记判断，不得仅凭 `origin` 推断。
 
 ## 5. SourceRef（来源追踪）
 
@@ -229,10 +229,23 @@ ACTIVE / DORMANT / ARCHIVED ──(用户删除)──> SOFT_DELETED ──(确�
 | `targetVersionId` | UUID? | 被审阅版本 |
 | `action` | enum | `CONFIRM` / `CORRECT` / `MERGE` / `DISCARD` / `RESTORE` |
 | `resultVersionId` | UUID? | `CORRECT`/`MERGE` 产生的新版本 |
+| `confidenceLocked` | boolean | 该决策是否锁定了目标版本的置信度，使其退出自动衰减 |
 | `note` | text? | 用户备注 |
 | `decidedAt` | timestamptz | 时间 |
 
-人工决策本身也是仅追加记录。`CORRECT` 不修改原版本，而是创建 `origin = USER_CORRECTED` 的新版本并切换当前指针，保证“系统曾经记错过什么”可被审计。
+人工决策本身也是仅追加记录。各动作的语义：
+
+| action | 前置状态 | 对版本的影响 | 对 MemoryItem 的影响 |
+| --- | --- | --- | --- |
+| `CONFIRM` | 目标版本为 `CURRENT` 或 `NEEDS_REVIEW` | 不创建新版本，不改 `origin`；置信度置为 1.0 并锁定（`confidenceLocked = true`）；`NEEDS_REVIEW` 转为 `CURRENT` | 保持或恢复 `ACTIVE` |
+| `CORRECT` | 任意未删除版本 | 创建 `origin = USER_CORRECTED` 新版本，旧版本置 `SUPERSEDED` | 切换 `currentVersionId` |
+| `MERGE` | 存在两个及以上冲突版本 | 创建 `origin = USER_CORRECTED` 新版本合并内容，被合并版本置 `SUPERSEDED` | 切换 `currentVersionId`，冲突记录标记 `MERGED` |
+| `DISCARD` | 目标版本为 `NEEDS_REVIEW` 或非当前版本 | 目标版本置 `REJECTED`，不参与检索 | 若被丢弃版本原为候选当前版本，则 `currentVersionId` 回退至最近的有效 `CURRENT`；若无有效版本则置空并标记待审阅 |
+| `RESTORE` | `MemoryItem` 为 `SOFT_DELETED` | 版本状态不变 | 恢复为 `ACTIVE`；`PURGED` 不可恢复 |
+
+`CORRECT` 不修改原版本，而是创建新版本并切换当前指针，保证「系统曾经记错过什么」可被审计。
+
+关于置信度锁定：`CONFIRM` 作用于 `origin = MODEL_EXTRACTED` 的版本时，会出现「置信度为 1.0 且不衰减，但 `origin` 仍是 `MODEL_EXTRACTED`」的状态。这是刻意允许的——用户确认了模型的判断，但没有改写内容，因此不应伪造成 `USER_CORRECTED`。判断是否参与衰减以 `confidenceLocked` 为准，而非以 `origin` 推断（见不变量 5）。
 
 ## 10. MemoryTask（异步写入驱动）
 
@@ -240,13 +253,25 @@ ACTIVE / DORMANT / ARCHIVED ──(用户删除)──> SOFT_DELETED ──(确�
 | --- | --- | --- |
 | `id` | UUIDv7 | 身份 |
 | `ownerId` | UUID | 归属 |
-| `kind` | enum | `EXTRACT` / `EMBED` / `RESOLVE_CONFLICT` / `DECAY` / `PURGE` |
+| `kind` | enum | `EXTRACT` / `EMBED` / `RESOLVE_CONFLICT` / `DECAY` / `REEMBED` |
 | `status` | enum | `PENDING` / `RUNNING` / `SUCCEEDED` / `FAILED` / `REJECTED` |
 | `payload` | jsonb | 任务输入 |
 | `idempotencyKey` | string | 唯一键，重复登记不产生重复写入 |
 | `attempts` | int | 已尝试次数 |
 | `lastError` | text? | 最近失败原因 |
 | `availableAt` | timestamptz | 最早可执行时间，支持退避重试 |
+
+各任务类型的职责：
+
+| kind | 触发方式 | 职责 |
+| --- | --- | --- |
+| `EXTRACT` | 回答返回后登记 | 从消息中提取候选记忆并校验 |
+| `EMBED` | 新版本进入 `CURRENT` 后登记 | 为版本生成向量 |
+| `RESOLVE_CONFLICT` | 提取发现冲突时登记 | 执行冲突消解策略 |
+| `DECAY` | 定时任务 | 按半衰期更新置信度与状态，不删除内容 |
+| `REEMBED` | 切换 Embedding 模型时批量登记 | 用新模型回填向量，对应 [ADR-002](../adr/0002-postgresql-pgvector.md) 决策 5 的双写/回填/校验/切换流程 |
+
+**硬删除不是任务类型。** 它必须在单个同步事务内完成，否则会出现"结构已删、向量残留"的中间状态，无法满足威胁模型验收项 2（硬删除后三张表均无残留）。因此 `purge` 只有同步用例，不进入 `memory_task`。
 
 `EXTRACT` 的 `idempotencyKey` 由 `(conversationId, messageId, promptVersion)` 派生，因此同一条消息不会被重复提取成多条记忆。
 
