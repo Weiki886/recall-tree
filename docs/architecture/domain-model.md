@@ -24,7 +24,7 @@ Owner
                         │ evidence
 MemoryItem (身份稳定) ──< MemoryVersion (仅追加)
      │                        │
-     │                        └── MemoryEmbedding (每版本每模型一条)
+     │                        └── MemoryEmbedding (每版本每模型每修订一条)
      ├──< ConflictRecord (涉及两个及以上版本)
      └──< ReviewDecision (人工覆盖)
 
@@ -34,7 +34,48 @@ MemoryTask (异步写入流水线的驱动记录)
 
 核心区分：`MemoryItem` 是长期稳定的身份，`MemoryVersion` 是不可变的事实快照。所有“记忆被修改”实际都是新增版本并切换当前指针，历史永不原地覆写。
 
-## 2. MemoryItem（聚合根）
+## 2. 会话侧实体
+
+`Conversation` 与 `Message` 是记忆的输入来源，本身不承载记忆规则，此处给出字段以保证本文档可独立作为实现契约。
+
+### Conversation
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | UUIDv7 | 身份 |
+| `ownerId` | UUID | 数据归属，所有查询必填条件 |
+| `title` | string(≤200) | 会话标题，可由首条消息生成 |
+| `messageCount` | int | 消息数量 |
+| `lastMessageAt` | timestamptz? | 最近消息时间，用于列表排序 |
+| `deletedAt` | timestamptz? | 软删除标记；非空即退出列表与检索上下文 |
+| `createdAt` | timestamptz | 创建时间 |
+
+### Message
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | UUIDv7 | 身份，同时作为 `SourceRef.messageId` 的引用目标 |
+| `conversationId` | UUID | 所属会话 |
+| `ownerId` | UUID | 数据归属 |
+| `role` | enum | `USER` / `ASSISTANT` |
+| `content` | text | 消息正文 |
+| `traceId` | UUID? | 关联的 `RetrievalTrace`，仅 `ASSISTANT` 消息有值 |
+| `memoryDegraded` | boolean | 本次回答是否在检索降级下生成 |
+| `promptTokens` / `completionTokens` | int? | Token 用量，仅 `ASSISTANT` 消息有值 |
+| `model` | string? | 实际使用的模型标识，仅 `ASSISTANT` 消息有值 |
+| `latencyMs` | int? | 生成耗时 |
+| `createdAt` | timestamptz | 时间 |
+
+不变量：
+
+1. `Message` 仅追加，不可编辑或原地覆写。
+2. `SourceRef.messageId` 引用的消息不得被物理删除，否则记忆将失去证据链；会话删除采用软删除。
+3. `traceId`、`promptTokens`、`completionTokens`、`model` 只在 `role = ASSISTANT` 时非空。
+4. 硬删除记忆不删除来源消息；反之删除会话也不自动删除已提取的记忆，两者生命周期独立。
+
+第 4 条是刻意设计：记忆一旦提取就具有独立价值，不应因为用户清理聊天记录而丢失；反过来用户删除某条记忆时，原始对话仍然保留。若用户要求同时清除两者，需分别调用会话删除与记忆硬删除。
+
+## 3. MemoryItem（聚合根）
 
 代表一条持续存在的记忆主体，例如“用户的毕业设计题目”。
 
@@ -69,7 +110,7 @@ ACTIVE / DORMANT / ARCHIVED ──(用户删除)──> SOFT_DELETED ──(确�
 
 `DORMANT` 仍可被检索但显著降权；`ARCHIVED` 默认不进入检索，仅在记忆中心可见；`SOFT_DELETED` 不进入检索且内容不返回；`PURGED` 是终态且不可恢复。
 
-## 3. MemoryVersion（不可变快照）
+## 4. MemoryVersion（不可变快照）
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -99,7 +140,7 @@ ACTIVE / DORMANT / ARCHIVED ──(用户删除)──> SOFT_DELETED ──(确�
 4. `supersedesVersionId` 必须属于同一 `MemoryItem` 且 `versionNo` 更小。
 5. `origin = USER_CORRECTED` 的版本置信度固定为 1.0，且不参与自动衰减。
 
-## 4. SourceRef（来源追踪）
+## 5. SourceRef（来源追踪）
 
 每个版本必须至少有一条来源，否则不可进入 `CURRENT`。
 
@@ -116,7 +157,7 @@ ACTIVE / DORMANT / ARCHIVED ──(用户删除)──> SOFT_DELETED ──(确�
 
 `quote` 让“为什么系统认为这件事成立”可以在 UI 上直接回溯到原始对话，这是论文可解释性论证的证据链末端。
 
-## 5. ConflictRecord（冲突与消解）
+## 6. ConflictRecord（冲突与消解）
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -133,7 +174,7 @@ ACTIVE / DORMANT / ARCHIVED ──(用户删除)──> SOFT_DELETED ──(确�
 
 消解优先级固定为：`USER_AUTHORITY` > `SPECIFICITY` > `RECENCY` > `MODEL_JUDGED`。用户明确修正过的事实不会被后续模型提取悄悄推翻，这是系统可信度的底线。无法判定时写入 `NEEDS_REVIEW`，双版本保留且检索降权。
 
-## 6. MemoryEmbedding
+## 7. MemoryEmbedding
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -147,7 +188,7 @@ ACTIVE / DORMANT / ARCHIVED ──(用户删除)──> SOFT_DELETED ──(确�
 
 约束：`(memoryVersionId, modelId, modelRevision)` 唯一。切换模型时新增行而非覆盖，回填完成并校验后再清理旧向量。
 
-## 7. RetrievalTrace 与 RetrievalCandidate
+## 8. RetrievalTrace 与 RetrievalCandidate
 
 `RetrievalTrace` 记录一次检索的完整决策过程，是可解释检索的持久化产物。
 
@@ -158,6 +199,7 @@ ACTIVE / DORMANT / ARCHIVED ──(用户删除)──> SOFT_DELETED ──(确�
 | `conversationId` / `messageId` | UUID | 触发检索的上下文 |
 | `queryText` | text | 检索查询 |
 | `strategy` | string | 检索策略标识（含权重配置版本） |
+| `weights` | jsonb | 本次融合实际使用的各分量权重，例如 `{"semantic":0.5,"keyword":0.2,"recency":0.15,"importance":0.1,"confidence":0.05}` |
 | `candidateCount` / `selectedCount` | int | 召回与最终注入数量 |
 | `latencyMs` | int | 检索耗时 |
 | `degraded` | boolean | 是否发生降级 |
@@ -176,9 +218,9 @@ ACTIVE / DORMANT / ARCHIVED ──(用户删除)──> SOFT_DELETED ──(确�
 | `selected` | boolean | 是否注入 Prompt |
 | `reason` | string | 入选或落选原因 |
 
-分量分数全部持久化，因此消融实验可以直接基于真实 trace 分析各信号贡献，无需重跑模型。
+每个分量分数与融合权重全部持久化，因此消融实验可以直接基于真实 trace 分析各信号贡献或替换权重公式重新排名，无需重跑模型。
 
-## 8. ReviewDecision（人工覆盖）
+## 9. ReviewDecision（人工覆盖）
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -192,7 +234,7 @@ ACTIVE / DORMANT / ARCHIVED ──(用户删除)──> SOFT_DELETED ──(确�
 
 人工决策本身也是仅追加记录。`CORRECT` 不修改原版本，而是创建 `origin = USER_CORRECTED` 的新版本并切换当前指针，保证“系统曾经记错过什么”可被审计。
 
-## 9. MemoryTask（异步写入驱动）
+## 10. MemoryTask（异步写入驱动）
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
@@ -208,7 +250,7 @@ ACTIVE / DORMANT / ARCHIVED ──(用户删除)──> SOFT_DELETED ──(确�
 
 `EXTRACT` 的 `idempotencyKey` 由 `(conversationId, messageId, promptVersion)` 派生，因此同一条消息不会被重复提取成多条记忆。
 
-## 10. 时效与遗忘
+## 11. 时效与遗忘
 
 置信度随时间衰减，按记忆类型使用不同半衰期：
 
@@ -223,7 +265,7 @@ ACTIVE / DORMANT / ARCHIVED ──(用户删除)──> SOFT_DELETED ──(确�
 
 每次被检索命中会提升有效新鲜度（`lastAccessedAt` 与 `accessCount` 参与评分），实现“常用记忆更不易被遗忘”。衰减只改变状态与权重，绝不静默删除内容；删除只能由用户显式触发。
 
-## 11. 删除语义
+## 12. 删除语义
 
 | 操作 | 效果 | 可恢复 |
 | --- | --- | --- |

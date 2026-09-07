@@ -1,0 +1,50 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Java / Maven
+target/
+*.class
+*.jar
+*.war
+!.mvn/wrapper/maven-wrapper.jar
+.mvn/timing.properties
+
+# Node / 前端
+node_modules/
+dist/
+dist-ssr/
+*.local
+.vite/
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/*
+!.vscode/extensions.json
+*.swp
+
+# 日志与临时文件
+*.log
+logs/
+npm-debug.log*
+pnpm-debug.log*
+
+# 凭据与本地配置：禁止提交真实密钥（见威胁模型 T9、T16）
+.env
+.env.*
+!.env.example
+application-local.yml
+application-local.yaml
+application-local.properties
+*.pem
+*.key
+
+# 测试与实验产物
+coverage/
+.nyc_output/
+evaluation/output/
+evaluation/runs/

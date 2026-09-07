@@ -588,7 +588,7 @@ components:
       description: |
         模型调用成本与延迟。流式与非流式路径都必须提供，
         否则实验无法统计 Token 成本（见 ADR-003 决策 6）。
-      required: [promptTokens, completionTokens]
+      required: [promptTokens, completionTokens, model]
       properties:
         promptTokens:
           type: integer
@@ -598,30 +598,93 @@ components:
           type: integer
         model:
           type: string
-          description: 实际使用的模型标识，回退或重试切换 Provider 时以此为准。
+          description: |
+            实际使用的模型标识。ADR-003 决策 6 要求每次调用可追溯模型，
+            决策 9 要求回退或重试切换 Provider 时写入原始结果，故为必填。
 
     StreamEvent:
-      type: object
       description: |
-        SSE 事件。event 字段决定 data 的负载类型：
-        retrieval-trace -> RetrievalTrace；token -> { "delta": string }；
-        message-completed -> MessageCompleted（含 TokenUsage）；
-        error -> Problem；done -> 空对象。
+        SSE 事件。event 字段判别 data 的负载类型，事件顺序为
+        retrieval-trace -> token(多次) -> message-completed -> done，
+        任何阶段失败改为 error 并终止流。
+
+        判别属性 event 内联在每个变体中，使代码生成器可据 discriminator
+        自动选择负载类型，而不必依赖文字描述。
+      oneOf:
+        - $ref: '#/components/schemas/RetrievalTraceEvent'
+        - $ref: '#/components/schemas/TokenEvent'
+        - $ref: '#/components/schemas/MessageCompletedEvent'
+        - $ref: '#/components/schemas/ErrorEvent'
+        - $ref: '#/components/schemas/DoneEvent'
+      discriminator:
+        propertyName: event
+        mapping:
+          retrieval-trace: '#/components/schemas/RetrievalTraceEvent'
+          token: '#/components/schemas/TokenEvent'
+          message-completed: '#/components/schemas/MessageCompletedEvent'
+          error: '#/components/schemas/ErrorEvent'
+          done: '#/components/schemas/DoneEvent'
+
+    RetrievalTraceEvent:
+      type: object
+      description: 检索完成，先于首个 token 发送，且每次响应仅一次。
       required: [event, data]
       properties:
         event:
           type: string
-          enum: [retrieval-trace, token, message-completed, error, done]
+          const: retrieval-trace
         data:
-          description: JSON 负载，具体结构由 event 决定。
-          oneOf:
-            - $ref: '#/components/schemas/RetrievalTrace'
-            - $ref: '#/components/schemas/TokenDelta'
-            - $ref: '#/components/schemas/MessageCompleted'
-            - $ref: '#/components/schemas/Problem'
-            - type: object
-              description: done 事件负载，为空对象。
-              additionalProperties: false
+          $ref: '#/components/schemas/RetrievalTrace'
+      additionalProperties: false
+
+    TokenEvent:
+      type: object
+      description: 回答增量片段，可出现多次。
+      required: [event, data]
+      properties:
+        event:
+          type: string
+          const: token
+        data:
+          $ref: '#/components/schemas/TokenDelta'
+      additionalProperties: false
+
+    MessageCompletedEvent:
+      type: object
+      description: 回答生成完成，携带完整消息与 Token 用量。
+      required: [event, data]
+      properties:
+        event:
+          type: string
+          const: message-completed
+        data:
+          $ref: '#/components/schemas/MessageCompleted'
+      additionalProperties: false
+
+    ErrorEvent:
+      type: object
+      description: 任一阶段失败，负载为 Problem Details，流随即终止。
+      required: [event, data]
+      properties:
+        event:
+          type: string
+          const: error
+        data:
+          $ref: '#/components/schemas/Problem'
+      additionalProperties: false
+
+    DoneEvent:
+      type: object
+      description: 流正常结束标记。
+      required: [event, data]
+      properties:
+        event:
+          type: string
+          const: done
+        data:
+          type: object
+          additionalProperties: false
+      additionalProperties: false
 
     TokenDelta:
       type: object
@@ -942,6 +1005,10 @@ components:
 
     MemoryExport:
       type: object
+      description: |
+        全量导出归档。首版不分页：面向个人使用场景，记忆量在数千条以内，
+        单次响应可接受。若后续单用户记忆量显著增长，改为异步任务 + 下载链接，
+        而不是在此端点上追加分页参数。
       required: [schemaVersion, exportedAt, items]
       properties:
         schemaVersion:
@@ -950,6 +1017,9 @@ components:
         exportedAt:
           type: string
           format: date-time
+        itemCount:
+          type: integer
+          description: 导出的记忆条数，便于客户端校验完整性。
         items:
           type: array
           items:
