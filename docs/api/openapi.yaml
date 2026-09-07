@@ -1,0 +1,932 @@
+openapi: 3.1.0
+info:
+  title: RecallTree API
+  version: 0.1.0
+  description: |
+    RecallTree 长期记忆管理系统的 HTTP 契约。
+
+    认证：所有 /v1 端点要求 Authorization: Bearer <token>，服务端据此解析 ownerId。
+    请求体不得携带 ownerId；跨 Owner 访问返回 404 而非 403，避免存在性泄漏。
+
+    幂等：写端点接受 Idempotency-Key 头。相同 Key 与相同请求体在保留期内返回首次结果；
+    相同 Key 配不同请求体返回 409 idempotency_key_reused。
+
+    错误模型：统一使用 Problem Details (RFC 9457)，媒体类型 application/problem+json。
+  license:
+    name: MIT
+    identifier: MIT
+
+servers:
+  - url: http://localhost:8080
+    description: 本地开发环境
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: chat
+    description: 带长期记忆的对话
+  - name: memory
+    description: 记忆浏览、审阅与删除
+  - name: trace
+    description: 检索轨迹查询
+  - name: ops
+    description: 健康与就绪检查
+
+paths:
+  /v1/conversations:
+    post:
+      tags: [chat]
+      summary: 创建会话
+      operationId: createConversation
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateConversationRequest'
+      responses:
+        '201':
+          description: 会话已创建
+          headers:
+            Location:
+              description: 新会话资源地址
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Conversation'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    get:
+      tags: [chat]
+      summary: 列出会话
+      operationId: listConversations
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: 会话分页列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Conversation'
+                  nextCursor:
+                    type: [string, 'null']
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /v1/conversations/{conversationId}/messages:
+    post:
+      tags: [chat]
+      summary: 发送消息并流式接收带记忆的回答
+      description: |
+        默认返回 text/event-stream。事件序列固定为：
+        retrieval-trace（一次，检索完成后立即发送，先于首个 token）
+        -> token（多次）-> message-completed（一次）-> done。
+        任何阶段失败都会发送 error 事件，并携带 Problem Details 负载。
+        客户端可通过 Accept: application/json 请求非流式响应。
+      operationId: sendMessage
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendMessageRequest'
+      responses:
+        '200':
+          description: 流式或完整回答
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/StreamEvent'
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageDetail'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503': { $ref: '#/components/responses/ProviderUnavailable' }
+    get:
+      tags: [chat]
+      summary: 列出会话消息
+      operationId: listMessages
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: 消息分页列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Message'
+                  nextCursor:
+                    type: [string, 'null']
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/memories:
+    get:
+      tags: [memory]
+      summary: 列出记忆
+      description: 默认只返回 ACTIVE 与 DORMANT；SOFT_DELETED 需显式指定 status 且不返回内容。
+      operationId: listMemories
+      parameters:
+        - name: type
+          in: query
+          schema:
+            $ref: '#/components/schemas/MemoryType'
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/MemoryItemStatus'
+        - name: subject
+          in: query
+          schema:
+            type: string
+            maxLength: 128
+        - name: needsReview
+          in: query
+          description: 仅返回存在未决冲突的记忆
+          schema:
+            type: boolean
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: 记忆分页列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/MemoryItem'
+                  nextCursor:
+                    type: [string, 'null']
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /v1/memories/{memoryItemId}:
+    get:
+      tags: [memory]
+      summary: 获取记忆详情与完整版本时间线
+      operationId: getMemory
+      parameters:
+        - $ref: '#/components/parameters/MemoryItemId'
+      responses:
+        '200':
+          description: 记忆详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryDetail'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [memory]
+      summary: 软删除记忆
+      description: 幂等操作。记忆退出检索且内容不再返回，可通过 review 的 RESTORE 恢复。
+      operationId: softDeleteMemory
+      parameters:
+        - $ref: '#/components/parameters/MemoryItemId'
+      responses:
+        '204':
+          description: 已软删除（重复调用同样返回 204）
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /v1/memories/{memoryItemId}/reviews:
+    post:
+      tags: [memory]
+      summary: 人工审阅记忆
+      description: |
+        CORRECT 与 MERGE 会创建 origin=USER_CORRECTED 的新版本并切换当前指针，
+        不修改历史版本。CONFIRM 将置信度锁定为 1.0。RESTORE 仅对 SOFT_DELETED 有效。
+      operationId: reviewMemory
+      parameters:
+        - $ref: '#/components/parameters/MemoryItemId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReviewRequest'
+      responses:
+        '201':
+          description: 审阅已记录
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReviewResult'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /v1/memories/{memoryItemId}/purge:
+    post:
+      tags: [memory]
+      summary: 硬删除记忆（不可恢复）
+      description: |
+        必须先处于 SOFT_DELETED，且请求体 confirm 必须为记忆的 UUID，防止误触发。
+        单事务内删除版本内容、结构化字段、来源引用与向量，仅保留不含用户文本的审计壳。
+      operationId: purgeMemory
+      parameters:
+        - $ref: '#/components/parameters/MemoryItemId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirm]
+              properties:
+                confirm:
+                  type: string
+                  format: uuid
+                  description: 必须等于 memoryItemId
+              additionalProperties: false
+      responses:
+        '204':
+          description: 已彻底删除
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: 记忆尚未软删除，或已处于 PURGED 终态
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+  /v1/memories/exports:
+    post:
+      tags: [memory]
+      summary: 导出当前用户全部记忆
+      description: 返回含版本、来源、冲突与审阅记录的 JSON 归档，用于用户数据可携带性。
+      operationId: exportMemories
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: 导出归档
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryExport'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /v1/traces/{traceId}:
+    get:
+      tags: [trace]
+      summary: 查询检索轨迹
+      description: 返回一次检索的全部候选及其分量得分，含未入选候选与落选原因。
+      operationId: getTrace
+      parameters:
+        - name: traceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: 检索轨迹
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetrievalTrace'
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /v1/health:
+    get:
+      tags: [ops]
+      summary: 存活与依赖健康检查
+      operationId: health
+      security: []
+      responses:
+        '200':
+          description: 服务可用（依赖可能降级）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+        '503':
+          description: 服务不可用
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: 建议使用 UUIDv7。保留期 24 小时。
+      schema:
+        type: string
+        maxLength: 64
+    ConversationId:
+      name: conversationId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    MemoryItemId:
+      name: memoryItemId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: 上一页返回的 nextCursor，基于 UUIDv7 单调性做键集分页。
+      schema:
+        type: string
+
+  responses:
+    BadRequest:
+      description: 请求格式或参数非法
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Unauthorized:
+      description: 缺少或无效的 Bearer Token
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    NotFound:
+      description: 资源不存在，或不属于当前 Owner
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    Conflict:
+      description: 状态冲突或幂等键复用
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    UnprocessableEntity:
+      description: 语义校验失败
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    TooManyRequests:
+      description: 触发限流
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    ProviderUnavailable:
+      description: 模型 Provider 超时或不可用
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+
+  schemas:
+    Problem:
+      type: object
+      description: RFC 9457 Problem Details。
+      required: [type, title, status, code]
+      properties:
+        type:
+          type: string
+          format: uri
+          default: about:blank
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+        code:
+          type: string
+          description: 机器可读错误码。
+          enum:
+            - validation_failed
+            - unauthorized
+            - not_found
+            - idempotency_key_reused
+            - memory_state_conflict
+            - purge_not_allowed
+            - rate_limited
+            - provider_unavailable
+            - retrieval_degraded
+            - internal_error
+        traceId:
+          type: string
+          description: 用于关联服务端日志。
+        errors:
+          type: array
+          description: 字段级校验错误。
+          items:
+            type: object
+            required: [field, message]
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+
+    MemoryType:
+      type: string
+      enum: [FACT, PREFERENCE, GOAL, TASK, CONSTRAINT, SKILL_STATE]
+
+    MemoryItemStatus:
+      type: string
+      enum: [ACTIVE, DORMANT, ARCHIVED, SOFT_DELETED, PURGED]
+
+    MemoryVersionState:
+      type: string
+      enum: [CURRENT, SUPERSEDED, REJECTED, NEEDS_REVIEW]
+
+    MemoryOrigin:
+      type: string
+      enum: [MODEL_EXTRACTED, USER_ASSERTED, USER_CORRECTED, SYSTEM_DERIVED]
+
+    CreateConversationRequest:
+      type: object
+      properties:
+        title:
+          type: string
+          maxLength: 200
+      additionalProperties: false
+
+    Conversation:
+      type: object
+      required: [id, title, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        messageCount:
+          type: integer
+        lastMessageAt:
+          type: [string, 'null']
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+
+    SendMessageRequest:
+      type: object
+      required: [content]
+      properties:
+        content:
+          type: string
+          minLength: 1
+          maxLength: 8000
+        memoryEnabled:
+          type: boolean
+          default: true
+          description: 关闭时跳过检索与写入，用于基线对照。
+        strategy:
+          type: string
+          description: 指定检索策略标识，用于消融实验；缺省使用默认策略。
+      additionalProperties: false
+
+    Message:
+      type: object
+      required: [id, role, content, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum: [USER, ASSISTANT]
+        content:
+          type: string
+        traceId:
+          type: [string, 'null']
+          format: uuid
+        memoryDegraded:
+          type: boolean
+          default: false
+        createdAt:
+          type: string
+          format: date-time
+
+    MessageDetail:
+      allOf:
+        - $ref: '#/components/schemas/Message'
+        - type: object
+          properties:
+            trace:
+              $ref: '#/components/schemas/RetrievalTrace'
+            usage:
+              type: object
+              properties:
+                promptTokens:
+                  type: integer
+                completionTokens:
+                  type: integer
+                latencyMs:
+                  type: integer
+
+    StreamEvent:
+      type: object
+      description: |
+        SSE 事件。event 字段决定 data 的负载类型：
+        retrieval-trace -> RetrievalTrace；token -> { "delta": string }；
+        message-completed -> Message；error -> Problem；done -> 空对象。
+      required: [event, data]
+      properties:
+        event:
+          type: string
+          enum: [retrieval-trace, token, message-completed, error, done]
+        data:
+          description: JSON 负载，具体结构由 event 决定。
+
+    MemoryItem:
+      type: object
+      required: [id, type, subject, attribute, status, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          $ref: '#/components/schemas/MemoryType'
+        subject:
+          type: string
+        attribute:
+          type: string
+        currentContent:
+          type: [string, 'null']
+          description: 当前生效内容。SOFT_DELETED 或冲突未决时为 null。
+        status:
+          $ref: '#/components/schemas/MemoryItemStatus'
+        importance:
+          type: number
+          minimum: 0
+          maximum: 1
+        confidence:
+          type: [number, 'null']
+          minimum: 0
+          maximum: 1
+        versionCount:
+          type: integer
+        hasUnresolvedConflict:
+          type: boolean
+        lastAccessedAt:
+          type: [string, 'null']
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    MemoryDetail:
+      allOf:
+        - $ref: '#/components/schemas/MemoryItem'
+        - type: object
+          required: [versions]
+          properties:
+            versions:
+              type: array
+              description: 按 versionNo 升序的完整时间线。
+              items:
+                $ref: '#/components/schemas/MemoryVersion'
+            conflicts:
+              type: array
+              items:
+                $ref: '#/components/schemas/ConflictRecord'
+            reviews:
+              type: array
+              items:
+                $ref: '#/components/schemas/ReviewDecision'
+
+    MemoryVersion:
+      type: object
+      required: [id, versionNo, content, state, confidence, validFrom, recordedAt, origin, sources]
+      properties:
+        id:
+          type: string
+          format: uuid
+        versionNo:
+          type: integer
+          minimum: 1
+        content:
+          type: string
+        structured:
+          type: object
+          additionalProperties: true
+        state:
+          $ref: '#/components/schemas/MemoryVersionState'
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        validFrom:
+          type: string
+          format: date-time
+          description: 事实开始生效的事件时间。
+        validTo:
+          type: [string, 'null']
+          format: date-time
+          description: null 表示当前仍然有效。
+        recordedAt:
+          type: string
+          format: date-time
+          description: 系统写入时间（决策时间）。
+        supersedesVersionId:
+          type: [string, 'null']
+          format: uuid
+        origin:
+          $ref: '#/components/schemas/MemoryOrigin'
+        extractionModel:
+          type: [string, 'null']
+        promptVersion:
+          type: [string, 'null']
+        sources:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/SourceRef'
+
+    SourceRef:
+      type: object
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [MESSAGE, DOCUMENT, USER_INPUT, DERIVED]
+        conversationId:
+          type: [string, 'null']
+          format: uuid
+        messageId:
+          type: [string, 'null']
+          format: uuid
+        quote:
+          type: [string, 'null']
+          maxLength: 512
+        charStart:
+          type: [integer, 'null']
+        charEnd:
+          type: [integer, 'null']
+
+    ConflictRecord:
+      type: object
+      required: [id, incomingVersionId, existingVersionId, type, resolution, strategy, decidedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        incomingVersionId:
+          type: string
+          format: uuid
+        existingVersionId:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum: [CONTRADICTION, UPDATE, REFINEMENT, DUPLICATE]
+        resolution:
+          type: string
+          enum: [INCOMING_WINS, EXISTING_WINS, MERGED, BOTH_KEPT, NEEDS_REVIEW]
+        strategy:
+          type: string
+          enum: [RECENCY, SPECIFICITY, USER_AUTHORITY, MODEL_JUDGED, MANUAL]
+        rationale:
+          type: string
+          description: 面向用户可读的判定理由。
+        similarity:
+          type: number
+          minimum: 0
+          maximum: 1
+        decidedAt:
+          type: string
+          format: date-time
+
+    ReviewRequest:
+      type: object
+      required: [action]
+      properties:
+        action:
+          type: string
+          enum: [CONFIRM, CORRECT, MERGE, DISCARD, RESTORE]
+        targetVersionId:
+          type: string
+          format: uuid
+        correctedContent:
+          type: string
+          maxLength: 2000
+          description: action=CORRECT 或 MERGE 时必填。
+        resolveConflictId:
+          type: string
+          format: uuid
+          description: 指定本次审阅要消解的冲突记录。
+        note:
+          type: string
+          maxLength: 500
+      additionalProperties: false
+
+    ReviewDecision:
+      type: object
+      required: [id, action, decidedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        action:
+          type: string
+          enum: [CONFIRM, CORRECT, MERGE, DISCARD, RESTORE]
+        targetVersionId:
+          type: [string, 'null']
+          format: uuid
+        resultVersionId:
+          type: [string, 'null']
+          format: uuid
+        note:
+          type: [string, 'null']
+        decidedAt:
+          type: string
+          format: date-time
+
+    ReviewResult:
+      type: object
+      required: [reviewDecisionId, memoryItemStatus]
+      properties:
+        reviewDecisionId:
+          type: string
+          format: uuid
+        newVersionId:
+          type: [string, 'null']
+          format: uuid
+        memoryItemStatus:
+          $ref: '#/components/schemas/MemoryItemStatus'
+
+    RetrievalTrace:
+      type: object
+      required: [id, queryText, strategy, candidateCount, selectedCount, latencyMs, degraded, candidates]
+      properties:
+        id:
+          type: string
+          format: uuid
+        conversationId:
+          type: string
+          format: uuid
+        messageId:
+          type: string
+          format: uuid
+        queryText:
+          type: string
+        strategy:
+          type: string
+          description: 检索策略标识，含权重配置版本。
+        weights:
+          type: object
+          description: 本次融合使用的权重，便于消融复现。
+          additionalProperties:
+            type: number
+        candidateCount:
+          type: integer
+        selectedCount:
+          type: integer
+        latencyMs:
+          type: integer
+        degraded:
+          type: boolean
+        candidates:
+          type: array
+          description: 含未入选候选，用于可解释性分析。
+          items:
+            $ref: '#/components/schemas/RetrievalCandidate'
+        createdAt:
+          type: string
+          format: date-time
+
+    RetrievalCandidate:
+      type: object
+      required: [memoryVersionId, finalScore, selected]
+      properties:
+        memoryVersionId:
+          type: string
+          format: uuid
+        memoryItemId:
+          type: string
+          format: uuid
+        content:
+          type: string
+        semanticScore:
+          type: number
+        keywordScore:
+          type: number
+        recencyScore:
+          type: number
+        importanceScore:
+          type: number
+        confidenceScore:
+          type: number
+        finalScore:
+          type: number
+        selected:
+          type: boolean
+        reason:
+          type: string
+          description: 入选或落选原因，例如 below_threshold、needs_review_penalty。
+
+    MemoryExport:
+      type: object
+      required: [schemaVersion, exportedAt, items]
+      properties:
+        schemaVersion:
+          type: string
+          const: '1'
+        exportedAt:
+          type: string
+          format: date-time
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/MemoryDetail'
+
+    HealthStatus:
+      type: object
+      required: [status, checks]
+      properties:
+        status:
+          type: string
+          enum: [UP, DEGRADED, DOWN]
+        checks:
+          type: object
+          properties:
+            database:
+              type: string
+              enum: [UP, DOWN]
+            chatProvider:
+              type: string
+              enum: [UP, DEGRADED, DOWN, DISABLED]
+            embeddingProvider:
+              type: string
+              enum: [UP, DEGRADED, DOWN, DISABLED]
+            pendingMemoryTasks:
+              type: integer
