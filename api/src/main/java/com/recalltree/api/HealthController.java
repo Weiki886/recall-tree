@@ -38,7 +38,7 @@ public class HealthController {
         problem.put("type", URI.create("about:blank"));
         problem.put("title", title);
         problem.put("status", 503);
-        problem.put("code", "SERVICE_UNAVAILABLE");
+        problem.put("code", "internal_error");
         problem.put("detail", detail);
         return problem;
     }
