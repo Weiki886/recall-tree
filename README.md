@@ -20,7 +20,7 @@ RecallTree 是一个面向 AI Agent 的长期记忆管理系统，重点研究�
 
 - Java 21 LTS、Spring Boot、Spring MVC、Maven；
 - 模块化单体与 Port/Adapter 边界；
-- PostgreSQL 17、pgvector、Spring JDBC、Flyway；
+- PostgreSQL 17、pgvector、MyBatis、Flyway；
 - Spring AI 只用于 Chat/Embedding Provider 适配；
 - Vue 3、TypeScript、Vite；
 - JUnit 5、Testcontainers、WireMock、ArchUnit、Vitest、Playwright；

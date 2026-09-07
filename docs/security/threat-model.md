@@ -51,7 +51,7 @@
 
 | ID | 威胁 | STRIDE | 缓解 |
 | --- | --- | --- | --- |
-| T6 | SQL 注入 | Tampering | 全部使用 `NamedParameterJdbcTemplate` 参数绑定；禁止字符串拼接 SQL，排序字段用白名单枚举 |
+| T6 | SQL 注入 | Tampering | MyBatis 一律使用 `#{}` 预编译绑定；禁止用 `${}` 拼接用户输入，排序字段与方向只允许白名单枚举值；动态过滤用 `<where><if>` 而非字符串拼接 |
 | T7 | 遗漏 ownerId 条件导致跨用户数据串门 | Information Disclosure | Repository 公开方法必须接收 ownerId；用集成测试构造两个 Owner 断言互相不可见 |
 | T8 | 硬删除后向量或来源残留 | Information Disclosure | 单事务内级联删除版本、来源、向量；删除后用自动化测试断言三张表均查不到记录 |
 | T9 | 数据库凭据泄漏 | Information Disclosure | 凭据只来自环境变量；仓库中只有 `.env.example`；`.gitignore` 排除真实配置 |
